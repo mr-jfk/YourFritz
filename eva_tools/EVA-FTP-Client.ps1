@@ -23,6 +23,8 @@ Param([Parameter(Mandatory = $False, Position = 0, HelpMessage = 'the IP address
       [Parameter(Mandatory = $False, Position = 1, HelpMessage = 'an optional script block, which will be executed in the context of an active FTP session')][ScriptBlock]$ScriptBlock
 )
 
+$Global:LogoutBeforeClose = $False
+
 #######################################################################################
 #                                                                                     #
 # check the reply of the server for the expected error code                           #
@@ -90,6 +92,9 @@ function SendCommand {
     $Global:EVAWriter.WriteLine($command)
     $Global:EVAWriter.Flush()
     Write-Debug "Sent`n$command`n================"
+    if ($command.ToUpper() -eq "QUIT") {
+      $Global:LogoutBeforeClose = $False
+    }
 }
 
 #######################################################################################
@@ -210,6 +215,7 @@ function UploadFlashFile {
           [ValidateNotNullOrEmpty()][Parameter(Mandatory = $True, Position = 1, HelpMessage = 'the target partition name (e.g. MTDx)')][String]$target
     )
 
+    Resolve-Path .
     # set binary transfer mode
     SendCommand "TYPE I"
     $answer = ReadAnswer
@@ -241,6 +247,8 @@ function BootDeviceFromImage {
     )
 
     if ($DebugPreference -eq "Inquire") { $DebugPreference = "Continue" }
+    $path = Resolve-Path .
+    Write-Debug $path
     if (-not (Test-Path $filename)) {
         $ex = New-Object System.Management.Automation.MethodInvocationException "The specified file cannot be found or accessed."
         Throw $ex
@@ -329,10 +337,14 @@ function WriteFile {
         $data_port = ( [System.Int32]::Parse($Matches["p1"]) * 256 ) + [System.Int32]::Parse($Matches["p2"])
     }
     # open connection and stream
+    Write-Debug "$data_addr : $data_port"
     try {
         $connection = New-Object System.Net.Sockets.TcpClient $data_addr, $data_port
+        Write-Debug "Connection"
         $stream = $connection.GetStream()
+        Write-Debug "GetStream"
         $file = [System.IO.File]::Open($filename, "Open", "Read")
+        Write-Debug "Opened"
     }
     catch {
         if ($stream) {
@@ -344,6 +356,7 @@ function WriteFile {
         return $False
     }
     try {
+        Write-Debug "STOR command"
         SendCommand "STOR $target"
         $answer = [String]::Empty
         while ($answer.Length -eq 0) {
@@ -557,9 +570,6 @@ function Login {
             $loggedIn = $True
             $loopRead = $False
         }
-        elseif (ParseAnswer $answer "530") {
-            $loopRead = $False
-        }
     }
     return $loggedIn
 }
@@ -601,6 +611,7 @@ if (ParseAnswer $answer "220") {
         SendCommand "SYST"
         $answer = ReadAnswer
         if (ParseAnswer $answer "215 AVM EVA") {
+            $Global:LogoutBeforeClose = $True
             if ($ScriptBlock) {
                 $ScriptBlock.Invoke()
             }
@@ -641,6 +652,10 @@ if (ParseAnswer $answer "220") {
 # or blame the author                                                               #
 #                                                                                   #
 #####################################################################################
+            }
+            if ($Global:LogoutBeforeClose) {
+              SendCommand "QUIT"
+              $answer = ReadAnswer
             }
         }
         else {
